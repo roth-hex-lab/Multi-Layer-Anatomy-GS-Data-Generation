@@ -1,4 +1,6 @@
 #include "renderer.h"
+#include <fstream>
+
 
 using namespace cppgl;
 
@@ -26,7 +28,7 @@ void tonemap(const Texture2D& tex, float exposure, float gamma) {
 // -----------------------------------------------------------
 // OpenGL renderer
 
-void RendererOpenGL::init() {
+void RendererOpenGL::init(bool interactive) {
     // load default volume
     if (!volume)
         volume = std::make_shared<voldata::Volume>();
@@ -47,6 +49,12 @@ void RendererOpenGL::init() {
         const glm::ivec2 res = Context::resolution();
         color = Texture2D("color", res.x, res.y, GL_RGBA32F, GL_RGBA, GL_FLOAT);
     }
+
+    if (!interactive) {
+        auto res = Context::resolution();
+        initFBO(res.x, res.y);
+        bindFBO();
+    }
 }
 
 void RendererOpenGL::resize(uint32_t w, uint32_t h) {
@@ -60,7 +68,8 @@ void RendererOpenGL::commit() {
     std::cout << "Preparing brick grids for OpenGL..." << std::endl;
     for (const auto& frame : volume->grids) {
         voldata::Volume::GridPtr density_grid = frame.at("density");
-        density_grids.push_back(brick_grid_to_textures(voldata::Volume::to_brick_grid(density_grid)));
+        auto brick_grid = voldata::Volume::to_brick_grid(density_grid);
+        density_grids.push_back(brick_grid_to_textures(brick_grid));
         voldata::Volume::GridPtr emission_grid;
         for (const auto& name : { "flame", "flames", "temperature" }) {
             if (frame.find(name) != frame.end()) {
@@ -82,6 +91,9 @@ void RendererOpenGL::trace() {
     // bind
     shader->bind();
     color->bind_image(0, GL_READ_WRITE, GL_RGBA32F);
+
+    // Additional shit
+    shader->uniform("cutoff", hounsfieldCutoff);
 
     // uniforms
     uint32_t tex_unit = 0;
@@ -158,6 +170,7 @@ void RendererOpenGL::reset() {
 
 BrickGridGL RendererOpenGL::brick_grid_to_textures(const std::shared_ptr<voldata::BrickGrid>& bricks) {
     // create indirection texture
+
     Texture3D indirection = Texture3D("brick indirection",
             bricks->indirection.stride.x,
             bricks->indirection.stride.y,
@@ -212,7 +225,7 @@ BrickGridGL RendererOpenGL::brick_grid_to_textures(const std::shared_ptr<voldata
             GL_COMPRESSED_RED,
             GL_RED,
             GL_UNSIGNED_BYTE,
-            bricks->atlas.data.data());
+            bricks->atlas.data.data());    
     atlas->bind(0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
@@ -239,4 +252,187 @@ void RendererOpenGL::scale_and_move_to_unit_cube() {
         volume->transform = glm::translate(glm::scale(glm::mat4(1), glm::vec3(1.f / size)), -bb_min - 0.5f * extent);
         density_scale *= size;
     }
+}
+
+glm::vec4 interpolated_value_from_lut(std::vector<glm::vec4> lut, float value) {
+    if (value < 0.0) value = 0;
+    if (value > 1.0) value = 1.0;
+    if (lut.size() == 1) return lut[0];
+    
+    float scaledIndex = value * (lut.size() - 1);
+    size_t indexLow = std::floor(scaledIndex);
+    size_t indexHigh = std::ceil(scaledIndex);
+
+    if (indexLow == indexHigh) return lut[indexLow];
+
+    float fraction = scaledIndex - indexLow;
+
+    auto interpolatedValue = ((1 - fraction) * lut[indexLow]) + (fraction * lut[indexHigh]);
+    
+    return interpolatedValue;
+}
+
+// Hacky but whatever
+float last_alpha = 0;
+std::unique_ptr<std::string> RendererOpenGL::lookup_pointdata(voldata::Volume::DenseGridPtr grid, int idx, float x, float y, float z) {
+    // Whats a good value here? Would it make sense to accumulate some density along the ray (poor mans raymarching...)? Too costly?
+    float ALPHA_THRESHOLD = 0.2f;
+    auto density = grid->lookup(glm::uvec3(x,y,z));
+    auto rgba = interpolated_value_from_lut(transferfunc->lut, density);
+
+    if (rgba.w + last_alpha > ALPHA_THRESHOLD) {
+        auto worldPos = volume->to_world(glm::vec4(x,y,z,1));
+        std::stringstream ss;
+        //ss << z << " " << density << " " << idx << " " << worldPos.x << " " << worldPos.y << " " << worldPos.z << " " << rgba.x << " " << rgba.y << " " << rgba.z << " " << rgba.w << " 0 0 0" << std::endl;
+        ss << idx << " " << worldPos.x << " " << worldPos.y << " " << worldPos.z << " " << (int) (rgba.x * 255) << " " << (int) (rgba.y * 255) << " " << (int) (rgba.z * 255) << " 0 0 0" << std::endl;
+        return std::make_unique<std::string>(ss.str());
+    }
+    last_alpha = rgba.w;
+    return nullptr;
+}
+
+void RendererOpenGL::to_pointcloud(float density, std::string path) {
+    std::cout << "Creating Pointcloud with density " << density << std::endl;
+
+    auto grid = volume->current_grid_dense();
+    auto ext = grid->index_extent();
+    int idx = 0;
+    std::vector<std::string> lines;
+
+
+    for (float x = 0; x < ext.x; x += density) {
+        // XY plane
+        for (float y = 0; y < ext.y; y += density) {
+            last_alpha = 0;
+            // Sample inwards until we find interesting point
+            for (float z = 0; z < ext.z; z += density) {
+
+                auto val = lookup_pointdata(grid, idx, x, y, z);
+                if (val) {
+                    lines.push_back(*val);
+                    idx++;
+                    break;
+                }
+            }
+
+            last_alpha = 0;
+            // Sample other direction until we find interesting point
+            for (float z = ext.z - 1; z >= 0; z -= density) {
+
+                auto val = lookup_pointdata(grid, idx, x, y, z);
+                if (val) {
+                    lines.push_back(*val);
+                    idx++;
+                    break;
+                }
+            }
+        }
+
+        // XZ plane
+        for (float z = 0; z < ext.z; z += density) {
+
+            last_alpha = 0;
+            // Sample inwards until we find interesting point
+            for (float y = 0; y < ext.y; y += density) {
+                auto val = lookup_pointdata(grid, idx, x, y, z);
+                if (val) {
+                    lines.push_back(*val);
+                    idx++;
+                    break;
+                }
+            }
+
+            last_alpha = 0;
+            // Sample other direction until we find interesting point
+            for (float y = ext.y - 1; y >= 0; y -= density) {
+                auto val = lookup_pointdata(grid, idx, x, y, z);
+                if (val) {
+                    lines.push_back(*val);
+                    idx++;
+                    break;
+                }
+            }
+        }
+    }
+
+    // YZ plane
+    for (float y = 0; y < ext.y; y += density) {
+        for (float z = 0; z < ext.z; z += density) {
+
+            last_alpha = 0;
+            // Sample inwards until we find interesting point
+            for (float x = 0; x < ext.x; x += density) {
+                auto val = lookup_pointdata(grid, idx, x, y, z);
+                if (val) {
+                    lines.push_back(*val);
+                    idx++;
+                    break;
+                }
+            }
+
+            last_alpha = 0;
+            // Sample other direction until we find interesting point
+            for (float x = ext.x - 1; x >= 0; x -= density) {
+                auto val = lookup_pointdata(grid, idx, x, y, z);
+                if (val) {
+                    lines.push_back(*val);
+                    idx++;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::filesystem::path filepath = path;
+    std::ofstream file(filepath);
+    if (file.is_open()) {
+        for (const auto& line : lines) {
+            file << line;
+        }
+    }
+    std::cout << lines.size() << " lines pointcloud saved to " << filepath << std::endl;
+}
+
+void RendererOpenGL::initFBO(int width, int height) {
+    fboSize = glm::ivec2(width, height);
+
+    // Generate and bind framebuffer
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    // Create texture to render to
+    glGenTextures(1, &fboTexture);
+    glBindTexture(GL_TEXTURE_2D, fboTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // Attach texture to framebuffer
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTexture, 0);
+
+    // Create and attach depth buffer
+    glGenRenderbuffers(1, &rboDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width, height);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
+
+    // Check framebuffer status
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "Error: Framebuffer is not complete!" << std::endl;
+    }
+
+    // Unbind framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void RendererOpenGL::bindFBO() {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, fboSize.x, fboSize.y);
+}
+
+void RendererOpenGL::unbindFBO() {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    const glm::ivec2 screenSize = Context::resolution();
+    glViewport(0, 0, screenSize.x, screenSize.y);
 }

@@ -15,7 +15,7 @@ struct BrickGridGL {
 
 struct RendererOpenGL {
     // Renderer interface
-    void init();
+    void init(bool interactive = true);
     void resize(uint32_t w, uint32_t h);
     void commit();
     void trace();
@@ -27,6 +27,11 @@ struct RendererOpenGL {
     // scale and move volume to fit into [-0.5, 0.5] unit cube
     void scale_and_move_to_unit_cube();
 
+    // Creates a colmap compatible pointcloud from object
+    std::unique_ptr<std::string> lookup_pointdata(voldata::Volume::DenseGridPtr grid, int idx, float x, float y, float z);
+    void to_pointcloud(float density, std::string path = "points3D.txt");
+
+
     // General settings
     int sample = 0;
     int sppx = 1024;
@@ -37,11 +42,15 @@ struct RendererOpenGL {
     bool tonemapping = true;
     bool show_environment = true;
 
+    std::string loaded_lut;
+
     // Volume settings
     glm::vec3 albedo = glm::vec3(0.9);  // volume albedo
     float phase = 0.f;                  // volume phase (henyey-greenstein g parameter)
     float density_scale = 1.f;          // volume density scaling factor
     float emission_scale = 100.f;       // volume emission scaling factor
+
+    float hounsfieldCutoff = 0.300f;
 
     // OpenGL data
     cppgl::Shader trace_shader, trace_shader_tf, tonemap_shader;
@@ -60,4 +69,14 @@ struct RendererOpenGL {
     // Scene data
     std::shared_ptr<Environment> environment;
     std::shared_ptr<TransferFunction> transferfunc;
+
+
+    void initFBO(int width, int height);
+    void bindFBO();
+    void unbindFBO();
+
+    GLuint fbo;
+    GLuint fboTexture;
+    GLuint rboDepth;
+    glm::ivec2 fboSize;
 };

@@ -1,5 +1,6 @@
 #include <glm/glm.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>  // For glm::value_ptr
 
 #include <cppgl.h>
 #include <voldata.h>
@@ -89,6 +90,7 @@ PYBIND11_EMBEDDED_MODULE(volpy, m) {
         .def("update_grid_frame", &voldata::Volume::update_grid_frame)
         .def("AABB", &voldata::Volume::AABB) // TODO default argument
         .def_readwrite("grid_frame_counter", &voldata::Volume::grid_frame_counter)
+        .def_readwrite("transform", &voldata::Volume::transform)
         .def("minorant_majorant", &voldata::Volume::minorant_majorant)
         .def("__repr__", &voldata::Volume::to_string, pybind11::arg("indent") = "");
 
@@ -115,11 +117,16 @@ PYBIND11_EMBEDDED_MODULE(volpy, m) {
 
     pybind11::class_<RendererOpenGL, std::shared_ptr<RendererOpenGL>>(m, "Renderer")
         .def(pybind11::init<>())
-        .def("init", &RendererOpenGL::init)
+        .def("init", [](const std::shared_ptr<RendererOpenGL>& renderer) {
+            renderer->init(false);
+        })
         .def("commit", &RendererOpenGL::commit)
         .def("trace", &RendererOpenGL::trace)
         .def("reset", &RendererOpenGL::reset)
         .def("scale_and_move_to_unit_cube", &RendererOpenGL::scale_and_move_to_unit_cube)
+        .def("to_pointcloud", [](const std::shared_ptr<RendererOpenGL>& renderer, float density, const std::string& path = "points3D.txt") {
+            renderer->to_pointcloud(density, path);
+        })
         .def("render", [](const std::shared_ptr<RendererOpenGL>& renderer, int spp) {
             current_camera()->update();
             renderer->sample = 0;
@@ -163,7 +170,10 @@ PYBIND11_EMBEDDED_MODULE(volpy, m) {
             image_store_ldr(outfile, pixels.data(), size.x, size.y, 4);
             std::cout << outfile << " written." << std::endl;
         })
-        // members
+        .def("rotate_env", [](const std::shared_ptr<RendererOpenGL>& renderer, float radians, glm::vec3 axis) {
+            renderer->environment->transform = glm::mat3(glm::rotate(glm::mat4(renderer->environment->transform), radians, axis));
+            renderer->reset();
+        })
         .def_readwrite("volume", &RendererOpenGL::volume)
         .def_readwrite("environment", &RendererOpenGL::environment)
         .def_readwrite("transferfunc", &RendererOpenGL::transferfunc)
@@ -181,6 +191,7 @@ PYBIND11_EMBEDDED_MODULE(volpy, m) {
         .def_readwrite("emission_scale", &RendererOpenGL::emission_scale)
         .def_readwrite("vol_clip_min", &RendererOpenGL::vol_clip_min)
         .def_readwrite("vol_clip_max", &RendererOpenGL::vol_clip_max)
+        .def_readwrite("cutoff", &RendererOpenGL::hounsfieldCutoff)
         // camera
         .def_readwrite_static("cam_pos", &current_camera()->pos)
         .def_readwrite_static("cam_dir", &current_camera()->dir)
@@ -374,8 +385,12 @@ PYBIND11_EMBEDDED_MODULE(volpy, m) {
             .def("column", [](const std::shared_ptr<glm::mat4>& m, uint32_t i) {
                 return m->operator[](i);
             })
-            .def("value", [](const std::shared_ptr<glm::mat4>& m, uint32_t i, uint32_t j) {
-                return m->operator[](i)[j];
+            .def("value", [](const glm::mat4& m, uint32_t i, uint32_t j) {
+                return m[i][j];
+            }, pybind11::return_value_policy::reference_internal)
+            .def("set_value", [](glm::mat4 &m, uint32_t i, uint32_t j, float value) {
+                float* ptr = glm::value_ptr(m);
+                ptr[i * 4 + j] = value;
             })
             .def_buffer([](glm::mat4& m) -> pybind11::buffer_info {
                 return pybind11::buffer_info(&m[0],

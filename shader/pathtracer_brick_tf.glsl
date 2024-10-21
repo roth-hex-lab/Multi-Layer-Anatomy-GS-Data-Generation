@@ -32,6 +32,7 @@ void main() {
 
     // trace ray
     const vec4 L = trace_path(pos, dir, seed);
+    //const vec4 L = direct_volume_rendering(pos, dir, seed);
 
     // write result
     imageStore(color, pixel, mix(imageLoad(color, pixel), sanitize(L), 1.f / current_sample));

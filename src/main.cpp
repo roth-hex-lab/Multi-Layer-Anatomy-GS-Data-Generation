@@ -29,6 +29,8 @@ static std::string out_filename = "output.png";
 
 static std::shared_ptr<RendererOpenGL> renderer;
 
+float pcdensity = 3;
+
 // ------------------------------------------
 // helper funcs
 
@@ -75,10 +77,15 @@ void load_transferfunc(const std::string& path) {
         renderer->transferfunc->upload_gpu();
         renderer->trace_shader = Shader("trace_tf", "shader/pathtracer_brick_tf.glsl");
         renderer->show_environment = false;
+        renderer->loaded_lut = path;
         renderer->sample = 0;
     } catch (std::runtime_error& e) {
         std::cerr << "Unable to load transferfunc from " << path << ": " << e.what() << std::endl;
     }
+}
+
+void reload_transferfunc() {
+    load_transferfunc(renderer->loaded_lut);
 }
 
 void run_script(const std::string& path) {
@@ -87,6 +94,7 @@ void run_script(const std::string& path) {
         pybind11::eval_file(path);
         renderer->sample = 0;
     } catch (pybind11::error_already_set& e) {
+        pybind11::print(e.value().attr("args"));
         std::cerr << "Error executing python script " << path << ": " << e.what() << std::endl;
     }
 }
@@ -215,6 +223,10 @@ void gui_callback(void) {
             renderer->transferfunc = std::make_shared<TransferFunction>(std::vector<glm::vec4>({ glm::vec4(0), glm::vec4(1,0,0,0.25), glm::vec4(0,1,0,0.5), glm::vec4(0,0,1,0.75), glm::vec4(1) }));
             renderer->reset();
         }
+        if (ImGui::Button("Reload TF")) {
+            reload_transferfunc();
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Write TF")) {
             renderer->transferfunc->write_to_file("tf_lut.txt");
         }
@@ -222,6 +234,8 @@ void gui_callback(void) {
             if (ImGui::DragFloat("Window left", &renderer->transferfunc->window_left, 0.01f, -1.f, 1.f)) renderer->reset();
             if (ImGui::DragFloat("Window width", &renderer->transferfunc->window_width, 0.01f, 0.f, 1.f)) renderer->reset();
         }
+        ImGui::Separator();
+        if (ImGui::DragFloat("cutoff", &renderer->hounsfieldCutoff, 0.001, 0.f, 1.f)) renderer->reset();
         ImGui::Separator();
         if (ImGui::SliderFloat("Vol crop min X", &renderer->vol_clip_min.x, 0.f, 1.f)) renderer->reset();
         if (ImGui::SliderFloat("Vol crop min Y", &renderer->vol_clip_min.y, 0.f, 1.f)) renderer->reset();
@@ -233,11 +247,12 @@ void gui_callback(void) {
         ImGui::Text("Modelmatrix:");
         glm::mat4 row_maj = glm::transpose(renderer->volume->transform);
         bool modified = false;
-        if (ImGui::InputFloat4("row0", &row_maj[0][0], "%.2f")) modified = true;
-        if (ImGui::InputFloat4("row1", &row_maj[1][0], "%.2f")) modified = true;
-        if (ImGui::InputFloat4("row2", &row_maj[2][0], "%.2f")) modified = true;
-        if (ImGui::InputFloat4("row3", &row_maj[3][0], "%.2f")) modified = true;
+        if (ImGui::InputFloat4("row0", &row_maj[0][0], "%.4f")) modified = true;
+        if (ImGui::InputFloat4("row1", &row_maj[1][0], "%.4f")) modified = true;
+        if (ImGui::InputFloat4("row2", &row_maj[2][0], "%.4f")) modified = true;
+        if (ImGui::InputFloat4("row3", &row_maj[3][0], "%.4f")) modified = true;
         if (modified) {
+            std::cout << "New matrix: " << row_maj << std::endl;
             renderer->volume->transform = glm::transpose(row_maj);
             renderer->reset();
         }
@@ -276,6 +291,11 @@ void gui_callback(void) {
         ImGui::Separator();
         if (ImGui::Button("Print volume properties"))
             std::cout << "volume: " << std::endl << renderer->volume->to_string("\t") << std::endl;
+        
+        ImGui::DragFloat("PC Density", &pcdensity, 0.05, 0.2f, 10.f);
+        if (ImGui::Button("To Points3D")) {
+            renderer->to_pointcloud(pcdensity);
+        }
         ImGui::PopStyleVar();
         ImGui::End();
     }
@@ -388,10 +408,12 @@ static void parse_cmd(int argc, char** argv) {
 int main(int argc, char** argv) {
     // initialize OpenGL
     init_opengl_from_args(argc, argv);
+    
 
     // initialize Renderer
     renderer = std::make_shared<RendererOpenGL>();
-    renderer->init();
+    renderer->init(interactive);
+
 
     // install callbacks for interactive mode
     Context::set_resize_callback(resize_callback);

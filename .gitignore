@@ -92,3 +92,37 @@ tags
 .vim
 
 # End of https://www.gitignore.io/api/vim,c++,linux,cmake
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+/build/
+
+imgui.ini
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# Local History for Visual Studio Code
+.history/
+
+# Built Visual Studio Code Extensions
+*.vsix
+
+# Compiled binary
+/volren
+
+output.png
+screenshot.png
+
+generated/*
+data/*

@@ -224,6 +224,8 @@ uniform float vol_density_scale;
 uniform float vol_emission_scale;
 uniform float vol_emission_norm;
 
+uniform float cutoff;
+
 // density brick grid stored as textures
 uniform mat4 vol_density_transform;
 uniform mat4 vol_density_inv_transform;
@@ -238,7 +240,8 @@ float lookup_density_brick(const vec3 ipos) {
     const uvec3 ptr = texelFetch(vol_density_indirection, brick, 0).xyz;
     const vec2 range = texelFetch(vol_density_range, brick, 0).xy;
     const float value_unorm = texelFetch(vol_density_atlas, ivec3(ptr << 3) + (iipos & 7), 0).x;
-    return range.x + value_unorm * (range.y - range.x);
+    const float normalized = range.x + value_unorm * (range.y - range.x);
+    return step(cutoff, normalized) * normalized;
 }
 
 // brick majorant lookup (nearest neighbor)
@@ -534,11 +537,11 @@ bool sample_volume_raymarch(const vec3 wpos, const vec3 wdir, out float t, inout
 // --------------------------------------------------------------
 // simple direct volume rendering
 
-vec3 direct_volume_rendering(vec3 pos, vec3 dir, inout uint seed) {
+vec4 direct_volume_rendering(vec3 pos, vec3 dir, inout uint seed) {
     vec3 L = vec3(0);
     // clip volume
     vec2 near_far;
-    if (!intersect_box(pos, dir, vol_bb_min, vol_bb_max, near_far)) return lookup_environment(dir);
+    if (!intersect_box(pos, dir, vol_bb_min, vol_bb_max, near_far)) return vec4(lookup_environment(dir), 0);
     // to index-space
     const vec3 ipos = vec3(vol_density_inv_transform * vec4(pos, 1));
     const vec3 idir = vec3(vol_density_inv_transform * vec4(dir, 0)); // non-normalized!
@@ -551,9 +554,10 @@ vec3 direct_volume_rendering(vec3 pos, vec3 dir, inout uint seed) {
         const float dtau = rgba.a * vol_majorant * dt;
         L += rgba.rgb * dtau * Tr;
         Tr *= exp(-dtau);
-        if (Tr <= 1e-6) return L;
+        //if (Tr <= 1e-6) return L;
     }
-    return L + lookup_environment(dir) * Tr;
+    //return L + lookup_environment(dir) * Tr;
+    return vec4(L + lookup_environment(dir) * Tr, 1-Tr);
 }
 
 // --------------------------------------------------------------

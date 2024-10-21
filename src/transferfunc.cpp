@@ -16,12 +16,15 @@ TransferFunction::TransferFunction(const fs::path& path) : TransferFunction() {
     if (!lut_file.is_open())
         throw std::runtime_error("Unable to read file: " + path.string());
     std::cout << "Loading LUT: " << path << std::endl;
+    lut.clear();
+
     char tmp[256];
     while (lut_file.getline(tmp, 256)) {
         float r, g, b, a;
         sscanf(tmp, "%f, %f, %f, %f", &r, &g, &b, &a);
         lut.emplace_back(r, g, b, a);
     }
+
     upload_gpu();
 }
 
@@ -42,12 +45,26 @@ void TransferFunction::set_uniforms(const Shader& shader, uint32_t buffer_bindin
 std::vector<glm::vec4> TransferFunction::compute_lut_cdf(const std::vector<glm::vec4>& lut) {
     // copy
     auto lut_cdf = lut;
+    bool monotonic = true;
+    std::cout << "LUT size: " << lut.size() << std::endl;
+
     // build density CDF (we require a monotonic nondecreasing function)
-    for (uint32_t i = 1; i < lut_cdf.size(); ++i)
+    for (uint32_t i = 1; i < lut_cdf.size(); ++i) {
+        if (lut[i].a < lut[i-1].a) monotonic = false;
         lut_cdf[i].a += lut_cdf[i-1].a;
+    }
+
+    // Exit early if lut is already monotonic, dont adjust
+    if (monotonic) {
+        std::cout << "LUT monotonic" << std::endl;
+        return lut;
+    }
+
     const float integral = lut_cdf[lut_cdf.size()-1].a;
-    for (uint32_t i = 0; i < lut_cdf.size(); ++i)
+    for (uint32_t i = 0; i < lut_cdf.size(); ++i) {
         lut_cdf[i].a = integral <= 0.f ? (i + 1) / float(lut_cdf.size()) : lut_cdf[i].a / integral;
+    }
+
     return lut_cdf;
 }
 

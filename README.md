@@ -1,3 +1,19 @@
+# Multi-Layer 3D Gaussian Splatting - Volume Renderer for Data Generation
+
+This is the data generation code for **Multi-Layer Gaussian Splatting for Immersive Anatomy Visualization**. The repository builds on a open source pathtracer and extends it for use with our layered Gaussian Splatting approach. You can find the original readme below. See the other repositories related to this work here: https://github.com/roth-hex-lab/Multi-Layer-Gaussian-Splatting-for-Immersive-Anatomy-Visualization
+
+This repository extends the original from https://github.com/nihofm/volren with bugfixes and scripts to create the images. Note that this repository does not include the medical volumes as we can not redistribute them. The volumes are available from their respective sources.
+
+The scripts to render all images as in the publication reside in the scripts folder. Install and run as per the instructions below. The rendered data is also available from https://osf.io/tuwh5/ 
+
+
+<br><br>
+-----
+
+Original Readme:
+
+<br>
+
 # VolRen
 
 Simple, yet fast OpenGL-based volume path tracer. Supports volumes in isolation lit by a environment map while employing NEE, MIS, RR and a fast volume tracking algorithm published in [Ray Tracing Gems 2](https://link.springer.com/chapter/10.1007/978-1-4842-7185-8_43).
